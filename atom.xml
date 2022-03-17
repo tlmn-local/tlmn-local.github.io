@@ -1,1 +1,423 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>今日明月夜</title><link>https://tlmn-local.github.io/</link><description>Recent content on 今日明月夜</description><generator>Hugo -- gohugo.io</generator><language>en-us</language><lastBuildDate>Sat, 26 Feb 2022 00:00:00 +0000</lastBuildDate><atom:link href="https://tlmn-local.github.io/atom.xml" rel="self" type="application/rss+xml"/></channel></rss>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>今日明月夜</title><link>https://tlmn-local.github.io/</link><description>Recent content on 今日明月夜</description><generator>Hugo -- gohugo.io</generator><language>en-us</language><lastBuildDate>Thu, 17 Mar 2022 16:27:29 +0800</lastBuildDate><atom:link href="https://tlmn-local.github.io/atom.xml" rel="self" type="application/rss+xml"/><item><title>NTLM Protocol</title><link>https://tlmn-local.github.io/2022/03/17/ntlm-protocol/</link><pubDate>Thu, 17 Mar 2022 16:27:29 +0800</pubDate><guid>https://tlmn-local.github.io/2022/03/17/ntlm-protocol/</guid><description>&lt;h1 id="概述">概述&lt;/h1>
+&lt;p>NTLM 是 Windows 众多认证协议之一，早期曾是 Windows 主要的认证方式，即使在后来 Kerberos 取代了 NTLM 作为首选的身份认证协议，但还是有很多场景必然需要使用到 NTLM 进行身份认证，包括但不限于：&lt;/p>
+&lt;ul>
+&lt;li>其中一方不支持 Kerberos&lt;/li>
+&lt;li>其中一方未加入域中（工作组环境）&lt;/li>
+&lt;li>应用程序选择使用 NTLM 作为认证协议（如部分 HTTP、SMB、SMTP、MSSQL&amp;hellip;）&lt;/li>
+&lt;/ul>
+&lt;p>可以发现 NTLM 在现在也有着大量的使用场景，因此研究它的原理、脆弱性及修复方式也是很有必要的，无论你是作为攻击者或是防守方。&lt;/p>
+&lt;p>NTLM 是一种基于挑战/响应的身份认证协议，这里需要注意一点，&lt;strong>NTLM 是作为第三方模块单独嵌入到应用程序中使用的&lt;/strong>，应用程序使用 NTLM 进行身份认证，并将会话层与认证层相互隔离，认证细节对应用程序是透明的，这种认证方式是一把双刃剑，后文中会谈到。&lt;/p>
+&lt;p>下图是客户端与服务端在通信过程中使用 NTLM 进行认证的一般流程，可以发现 NTLM Message 是嵌入到应用程序正常的 Message 中的：&lt;/p>
+&lt;img src="https://docs.microsoft.com/zh-cn/openspecs/windows_protocols/ms-nlmp/ms-nlmp_files/image001.png" alt="Typical NTLM authentication message flow" style="zoom:150%;" />
+&lt;p>NTLM 有着悠久的发展历史，作为 Windows 最早的认证协议之一，其有着多个历史版本，&lt;strong>包括 LM、NTLMv1 和 NTLMv2，几个版本的认证流程基本相同，区别仅在于计算 Response 的方式与设置了哪些 Response 字段。&lt;/strong>&lt;/p>
+&lt;h1 id="两种模式">两种模式&lt;/h1>
+&lt;p>NTLM 对于连接是否保持（TCP、UDP）设计了两种认证模式，一种是面向连接的，另一种则是无连接的，前者是目前用的最多的模式（因为大部分使用 NTLM 作为认证协议的应用均采用 TCP 进行数据传输）。&lt;/p>
+&lt;p>面向连接的认证流程如下：&lt;/p>
+&lt;img src="https://docs.microsoft.com/zh-cn/openspecs/windows_protocols/ms-nlmp/ms-nlmp_files/image002.png" alt="Connection-oriented NTLM message flow" style="zoom:150%;" />
+&lt;p>首先是客户端与服务端会进行正常通信，随后客户端发起 NEGOTIATE 消息告知服务端开始认证，服务端发送 CHALLENGE 消息告知客户端 Challenge，客户端计算后得到 Response 并发送 AUTHENTICATE 消息进行认证，&lt;strong>注意最后一条 Application message 不代表服务端不告知客户端认证结果，而是因为认证结果以何种形式发送是由应用程序决定的，此时已经与 NTLM 无关了。&lt;/strong>&lt;/p>
+&lt;p>无连接的认证流程如下：&lt;/p>
+&lt;img src="https://docs.microsoft.com/zh-cn/openspecs/windows_protocols/ms-nlmp/ms-nlmp_files/image003.png" alt="Connectionless NTLM message flow" style="zoom:150%;" />
+&lt;p>从上述认证流程上看，&lt;strong>虽然是服务端先向客户端发送了 Challenge，但实际上是由客户端通过应用程序自定义的某种消息先启动了认证流程&lt;/strong>，从整体上看与面向连接的认证方式基本一致，只不过第一步转为了应用程序自定义的消息。&lt;/p>
+&lt;p>上面说了 NTLM 存在多个版本，&lt;strong>其中 LM 已经基本废弃，较为常用的是 NTLMv1 与 NTLMv2 两个版本&lt;/strong>，至于使用哪个版本进行认证，则需要客户端与服务端共同设置，通常这里不会进行协商，而是直接在应用程序中写成固定代码。&lt;/p>
+&lt;h1 id="hash">Hash&lt;/h1>
+&lt;p>Windows 中不会存储用户密码的明文，只会存储其 Hash（后文称为哈希），&lt;strong>本地用户的密码哈希存放于当前机器的 SAM 文件中，域用户的密码哈希则存放于域控制器（Domain Controller）的 NTDS.DIT 文件中&lt;/strong>，默认情况下这两个文件是不可访问的，但可利用其它方式将哈希导出。&lt;/p>
+&lt;p>用户哈希通常由 LM-Hash 与 NT-Hash 两部分组成，其中 LM-Hash 是 Windows 最早使用的加密算法，核心使用了 DES 算法进行加密，由于 LM-Hash 存在较多的安全风险，于是从 Windows Vista 和 Windows Server 2008 开始，Windows 默认禁用了 LM-Hash，只启用 NT-Hash（&lt;strong>有的文中也将其称为 NTLM-Hash 或是 NTLM，为了避免与协议名称混淆，这里记为 NT-Hash&lt;/strong>），因此在大多数操作系统中我们获取到的哈希可能是这样的：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">{Username}:{SID}:AAD3B435B51404EEAAD3B435B51404EE:62f83cc8d728c97df1e3b0a94e5c3ef9
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>其中 &lt;code>AAD3B435B51404EEAAD3B435B51404EE&lt;/code> 为 LM-Hash，&lt;code>62f83cc8d728c97df1e3b0a94e5c3ef9&lt;/code> 为 NT-Hash，如果某用户没有设置密码或当前的操作系统设置为不存储 LM-Hash，那么所获取到的 LM-Hash 就是 &lt;code>AAD3B435B51404EEAAD3B435B51404EE&lt;/code> ，可以理解为空值，此哈希并没有价值，但某些工具要求输入格式为 &lt;code>{LM-Hash}:{NT-Hash}&lt;/code> ，此时可将其设置为 0 值：&lt;code>00000000000000000000000000000000:{NT-Hash}&lt;/code> 即可。&lt;/p>
+&lt;p>备注：&lt;/p>
+&lt;ul>
+&lt;li>SAM Path：C:\Windows\System32\config\SAM&lt;/li>
+&lt;li>NTDS.DIT Path：%SystemRoot%\NTDS\ntds.dit&lt;/li>
+&lt;/ul>
+&lt;h2 id="lm-hash-加密算法">LM-Hash 加密算法&lt;/h2>
+&lt;p>LM Hash 的加密算法如下：&lt;/p>
+&lt;ol>
+&lt;li>将所有字符转换为大写并转换为十六进制&lt;/li>
+&lt;li>如果长度不足14字节则在右侧填充 NULL 补充&lt;/li>
+&lt;li>将字符串分割为两个7字节的 chunk&lt;/li>
+&lt;li>将两个 chunk 分别先转为十六进制再转二进制&lt;/li>
+&lt;li>如果 chunk 的长度不到56则将其分割为7位一组并在每组末尾加0（最后一组除外）&lt;/li>
+&lt;li>将结果转为二进制后再转十六进制&lt;/li>
+&lt;li>去除开头的 0x 部分 以及右侧 L 字符后再次将两个 chunk 分别转为十六进制&lt;/li>
+&lt;li>将两个 chunk 分别作为 key 通过 DES 加密 &lt;code>KGS!@#$%&lt;/code> 字符串&lt;/li>
+&lt;li>将加密结果合并，得到最终的 LM-Hash&lt;/li>
+&lt;/ol>
+&lt;p>转换为 Python 代码如下（Python3）：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-python" data-lang="python">&lt;span class="line">&lt;span class="cl">&lt;span class="kn">import&lt;/span> &lt;span class="nn">binascii&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="kn">from&lt;/span> &lt;span class="nn">pyDes&lt;/span> &lt;span class="kn">import&lt;/span> &lt;span class="o">*&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">def&lt;/span> &lt;span class="nf">encode_des&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">data&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">key&lt;/span>&lt;span class="p">):&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">key&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">des&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">key&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">ECB&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">pad&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="kc">None&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">encrypt_data&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">key&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">encrypt&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">data&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="n">binascii&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">b2a_hex&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">encrypt_data&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">def&lt;/span> &lt;span class="nf">padding_zero&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">data&lt;/span>&lt;span class="p">):&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">result&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="p">[]&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">length&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">len&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">data&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">for&lt;/span> &lt;span class="n">i&lt;/span> &lt;span class="ow">in&lt;/span> &lt;span class="nb">range&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">length&lt;/span>&lt;span class="p">):&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="n">i&lt;/span> &lt;span class="o">%&lt;/span> &lt;span class="mi">7&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="mi">0&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">result&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">append&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">data&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="n">i&lt;/span>&lt;span class="p">:&lt;/span>&lt;span class="n">i&lt;/span> &lt;span class="o">+&lt;/span> &lt;span class="mi">7&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">+&lt;/span> &lt;span class="s1">&amp;#39;0&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="s1">&amp;#39;&amp;#39;&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">join&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">result&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">def&lt;/span> &lt;span class="nf">get_lm_hash&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">password&lt;/span>&lt;span class="p">):&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">password&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">password&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">upper&lt;/span>&lt;span class="p">()&lt;/span> &lt;span class="c1"># 转换为大写&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">str&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">binascii&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">b2a_hex&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">password&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">encode&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;utf-8&amp;#39;&lt;/span>&lt;span class="p">)),&lt;/span> &lt;span class="n">encoding&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s1">&amp;#39;utf-8&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="c1"># 转换为十六进制字符串&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">hex_password&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">ljust&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="mi">28&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="s1">&amp;#39;0&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="c1"># 不足十四字节的部分用0补全&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将十六进制字符串分为两个部分，每部分有七个字节&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">hex_password&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="mi">0&lt;/span>&lt;span class="p">:&lt;/span>&lt;span class="mi">14&lt;/span>&lt;span class="p">]&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">hex_password&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="mi">14&lt;/span>&lt;span class="p">:&lt;/span>&lt;span class="mi">28&lt;/span>&lt;span class="p">]&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将这两部分分别先转为十六进制再转为二进制&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">bin&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nb">int&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">hex_password_part_one&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="mi">16&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">bin&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nb">int&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">hex_password_part_two&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="mi">16&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将这两部分分别用0左填充长度至56&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">hex_password_part_one&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">lstrip&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;0b&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">rjust&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="mi">56&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="s1">&amp;#39;0&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">hex_password_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">hex_password_part_two&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">lstrip&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;0b&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">rjust&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="mi">56&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="s1">&amp;#39;0&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将两部分分别以7位一组，每组末尾加0（除最后一组）&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">padding_zero&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">hex_password_part_one&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">padding_zero&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">hex_password_part_two&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将结果转换为二进制后再转为十六进制&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">hex&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nb">int&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">padding_part_one&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="mi">2&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">hex&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nb">int&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">padding_part_two&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="mi">2&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 去除开头的0x部分以及右侧的L字符&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">padding_part_one&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="mi">2&lt;/span>&lt;span class="p">:]&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">rstrip&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;L&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">padding_part_two&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="mi">2&lt;/span>&lt;span class="p">:]&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">rstrip&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;L&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 如果part_2为0x0，则将其转换为0000000000000000进行适配&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="n">padding_part_two&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="s1">&amp;#39;0&amp;#39;&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="s1">&amp;#39;0000000000000000&amp;#39;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将其转换为十六进制&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">binascii&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">a2b_hex&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">padding_part_one&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">padding_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">binascii&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">a2b_hex&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">padding_part_two&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 将每个部分作为key加密KGS!@#$%字符串&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">lm_part_one&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">encode_des&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s2">&amp;#34;KGS!@#$%&amp;#34;&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">padding_part_one&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">lm_part_two&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">encode_des&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s2">&amp;#34;KGS!@#$%&amp;#34;&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">padding_part_two&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="c1"># 两组des加密结果拼接在一起，就是最终的结果&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">final_lm_hash&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="nb">str&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">lm_part_one&lt;/span> &lt;span class="o">+&lt;/span> &lt;span class="n">lm_part_two&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">encoding&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s1">&amp;#39;utf-8&amp;#39;&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="n">final_lm_hash&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">if&lt;/span> &lt;span class="vm">__name__&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="s1">&amp;#39;__main__&amp;#39;&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nb">print&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">get_lm_hash&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;&amp;lt;password&amp;gt;&amp;#39;&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>从代码上看，LM-Hash 存在许多脆弱的设计，如：&lt;/p>
+&lt;ul>
+&lt;li>不区分大小写&lt;/li>
+&lt;li>密码长度不能超过14位&lt;/li>
+&lt;li>使用分组拼接的方式计算 Hash，在得到 Hash 后也可使用分组爆破的方式还原密码，并且如果密码小于7位则后半段加密字符串必然是 &lt;code>aad3b435b51404ee&lt;/code>&lt;/li>
+&lt;/ul>
+&lt;h2 id="nt-hash-加密算法">NT-Hash 加密算法&lt;/h2>
+&lt;p>NT Hash 的加密算法的计算步骤较之LM Hash则简单许多：&lt;code>MD4(UTF-16-LE(password))&lt;/code>，转换为Python代码如下：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-python" data-lang="python">&lt;span class="line">&lt;span class="cl">&lt;span class="kn">import&lt;/span> &lt;span class="nn">hashlib&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="kn">import&lt;/span> &lt;span class="nn">binascii&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="n">password&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="s1">&amp;#39;&amp;lt;password&amp;gt;&amp;#39;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="nb">print&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="nb">str&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">binascii&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">hexlify&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">hashlib&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">new&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;md4&amp;#39;&lt;/span>&lt;span class="p">,&lt;/span>&lt;span class="n">password&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">encode&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s1">&amp;#39;utf-16le&amp;#39;&lt;/span>&lt;span class="p">))&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">digest&lt;/span>&lt;span class="p">()),&lt;/span>&lt;span class="n">encoding&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s1">&amp;#39;utf-8&amp;#39;&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;h2 id="验证">验证&lt;/h2>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h04u4d00sgj210h0u0gqg.jpg"
+loading="lazy"
+alt="verify-hash"
+>&lt;/p>
+&lt;p>对测试密码 &lt;code>DC082!@#&lt;/code> 进行加密计算 LM-Hash 与 NT-Hash，所得结果与图中一致：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-bash" data-lang="bash">&lt;span class="line">&lt;span class="cl">$ python3 lm_hash.py
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">a0ecede8e75ed1b4c2a20cae7226e17d
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">$ python3 nt_hash.py
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">cdf300d7f4c17e59e3b96a05794aa007
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;h1 id="ntlm">NTLM&lt;/h1>
+&lt;p>微软最早使用的认证协议是使用 LM-Hash 作为密钥的 LM，在上面曾提及 LM-Hash 存在诸多安全隐患，因此微软于1993年 Windows NT 3.1 中引入了 NTLMv1，并加入了 NT-Hash，此时 LM-Hash 与 NT-Hash 将共同使用，同时为了一定程度缓解重放攻击，微软在 Windows NT 4.0.SP4 中引入了 NTLMv2；本文将结合 SMB 的调用流程来对 NTLM 的认证过程进行实际分析（这里不区分v1或是v2，两个版本认证流程一致）。&lt;/p>
+&lt;p>使用命令 &lt;code>net use \\192.168.2.110 &amp;quot;Admin!@#$~!@#01&amp;quot; /user:&amp;quot;Administrator&amp;quot;&lt;/code> 尝试通过 SMB 协议链接 192.168.2.110 的共享资源，其中与 NTLM 认证有关的是图中圈起来的四条消息：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h08m2rbgfwj21c00u0gw5.jpg"
+loading="lazy"
+alt="image-20220313221258206"
+>&lt;/p>
+&lt;p>首先客户端发送 NEGOTIATE 消息启动认证流程，此消息会对本次认证中使用的安全机制进行协商(flag)，并将客户端的域名和工作组名一同传递给服务端：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h08m7t0qclj21c00u0gut.jpg"
+loading="lazy"
+alt="image-20220313221749189"
+>&lt;/p>
+&lt;p>随后服务端饭后 CHALLENGE 消息和 MORE_PROCESSING_REQUIRED 状态码告知客户端还需要传递用户信息以进行接下来的认证，CHALLENGE 中包含诸多来自服务端的信息，&lt;strong>包括最重要的 Challenge&lt;/strong>、Timestamp（用于缓解重放攻击）和服务端机器的相关信息（机器名、域名、DNS 域名及 DNS 机器名：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h08menarawj21c00u0ais.jpg"
+loading="lazy"
+alt="image-20220313222423456"
+>&lt;/p>
+&lt;p>当客户端收到这一条消息后，会从中提取出 challenge，并使用用户提供的密码生成对应的 NT-Hash 以及 LM-Hash，并使用对应的 Hash 对 challenge 和其余信息合并后进行加密，最终得到一个加密串，具体处理代码如下（伪代码）。&lt;/p>
+&lt;p>NTLMv1：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl"> --
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Functions Used:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Z(M)- Defined in section 6.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Define NTOWFv1(Passwd, User, UserDom) as MD4(UNICODE(Passwd))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndDefine
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Define LMOWFv1(Passwd, User, UserDom) as
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ConcatenationOf( DES( UpperCase( Passwd)[0..6],&amp;#34;KGS!@#$%&amp;#34;),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> DES( UpperCase( Passwd)[7..13],&amp;#34;KGS!@#$%&amp;#34;))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndDefine
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set ResponseKeyNT to NTOWFv1(Passwd, User, UserDom)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set ResponseKeyLM to LMOWFv1( Passwd, User, UserDom )
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Define ComputeResponse(NegFlg, ResponseKeyNT, ResponseKeyLM,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> CHALLENGE_MESSAGE.ServerChallenge, ClientChallenge, Time, ServerName)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> As
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> If (User is set to &amp;#34;&amp;#34; AND Passwd is set to &amp;#34;&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Special case for anonymous authentication
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponseLen to 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponseMaxLen to 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponseBufferOffset to 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set LmChallengeResponse to Z(1)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ElseIf
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> If (NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY flag is set in NegFlg)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponse to DESL(ResponseKeyNT,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> MD5(ConcatenationOf(CHALLENGE_MESSAGE.ServerChallenge,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ClientChallenge))[0..7])
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set LmChallengeResponse to ConcatenationOf{ClientChallenge,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Z(16)}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Else
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponse to DESL(ResponseKeyNT,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> CHALLENGE_MESSAGE.ServerChallenge)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> If (NoLMResponseNTLMv1 is TRUE)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set LmChallengeResponse to NtChallengeResponse
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Else
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set LmChallengeResponse to DESL(ResponseKeyLM,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> CHALLENGE_MESSAGE.ServerChallenge)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndIf
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndIf
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndIf
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set SessionBaseKey to MD4(NTOWF)
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>NTLMv2：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">Define NTOWFv2(Passwd, User, UserDom) as HMAC_MD5(
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> MD4(UNICODE(Passwd)), UNICODE(ConcatenationOf( Uppercase(User),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> UserDom ) ) )
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndDefine
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Define LMOWFv2(Passwd, User, UserDom) as NTOWFv2(Passwd, User,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> UserDom)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndDefine
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set ResponseKeyNT to NTOWFv2(Passwd, User, UserDom)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set ResponseKeyLM to LMOWFv2(Passwd, User, UserDom)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Define ComputeResponse(NegFlg, ResponseKeyNT, ResponseKeyLM,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> CHALLENGE_MESSAGE.ServerChallenge, ClientChallenge, Time, ServerName)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> As
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> If (User is set to &amp;#34;&amp;#34; &amp;amp;&amp;amp; Passwd is set to &amp;#34;&amp;#34;)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Special case for anonymous authentication
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponseLen to 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponseMaxLen to 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponseBufferOffset to 0
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set LmChallengeResponse to Z(1)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Else
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set temp to ConcatenationOf(Responserversion, HiResponserversion,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Z(6), Time, ClientChallenge, Z(4), ServerName, Z(4))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NTProofStr to HMAC_MD5(ResponseKeyNT,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ConcatenationOf(CHALLENGE_MESSAGE.ServerChallenge,temp))
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set NtChallengeResponse to ConcatenationOf(NTProofStr, temp)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set LmChallengeResponse to ConcatenationOf(HMAC_MD5(ResponseKeyLM,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ConcatenationOf(CHALLENGE_MESSAGE.ServerChallenge, ClientChallenge)),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ClientChallenge )
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndIf
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> Set SessionBaseKey to HMAC_MD5(ResponseKeyNT, NTProofStr)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> EndDefine
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>对比一下两者的加密算法，可以发现 NTLMv1 的加密较为简单，NTLMv2 的加密中除了 challenge 外还会将大量信息通过连接起来最后才进行加密，同时使用了 HMAC_MD5 进行以保护数据的完整性。&lt;/p>
+&lt;p>可以发现 NTLMv1 是不存在 NTProofStr 这个数据的，因此也可以通过是否存在 NTProofStr 来判断当前认证使用的是哪个版本，下面是 SMB2 中使用 NTLMv2 进行认证的 AUTHENTICATE 消息：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h08mt76v5yj21c00u0don.jpg"
+loading="lazy"
+alt="image-20220313223822719"
+>&lt;/p>
+&lt;p>&lt;strong>这里的 NTLMv2 Response 中的每一个字段都是受到 NTProofStr 保护的，因为 NTProofStr 是根据这些字段值和 challenge 生成出来的，因此新增或是修改其中任何一个字段都会导致服务端最后校验 NTProofStr 不成功，因为攻击者无法在没有 Hash 的情况 下重新生成 NTProofStr，这点很重要，也算是 NTLMv2 的一种保护机制。&lt;/strong>&lt;/p>
+&lt;p>当服务端收到客户端的 Response 后，可根据服务端环境分为两种不同的处理方式：&lt;/p>
+&lt;ul>
+&lt;li>在域环境中，服务端将 Challenge、Response Username 等信息发送给 DC，由 DC 调用 NTOWFv2 、LMOWFv2 对存储于 DC 上的域成员哈希计算对应的 NTProofStr 和 LM-Response，如果与客户端传递过来的相同则认证通过，反之则不通过&lt;/li>
+&lt;li>在工作组环境中，服务端调用 NTOWFv2 、LMOWFv2 对存储于服务端机器上的用户哈希计算对应的 NTProofStr 和 LM-Response，如果与客户端传递过来的相同则认为认证通过，反之则不通过&lt;/li>
+&lt;/ul>
+&lt;h1 id="ntlm-relay">NTLM Relay&lt;/h1>
+&lt;p>NTLM 有着许多的攻击面，包括诸如哈希传递（PTH）、哈希爆破等，但这些都是与哈希有关的，本文只记录与协议有关的一种攻击手法，即 NTLM Relay。&lt;/p>
+&lt;p>从 NTLM 的认证流程可以看出，服务端会对客户端的身份进行认证，然而客户端并不会对服务端的身份进行认证（即单向认证），也正是因为这种单向认证，才产生了 NTLM Relay 这种中间人攻击的手法。&lt;/p>
+&lt;p>正常的认证流程是向下图这样的：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0ao4lmdfsj20ui08q0tu.jpg"
+loading="lazy"
+alt="NTLM Challenge Response"
+>&lt;/p>
+&lt;p>假设攻击者有能力作为中间人的身份存在于客户端与服务端之间（也就是能够让客户端主动向攻击者发起 NTLM 认证请求），此时攻击者只需要简单的转发数据包，即可以客户端的身份调用服务端所提供的服务：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0ao86gjlxj20ut0i5mzt.jpg"
+loading="lazy"
+alt="NTLM Relay"
+>&lt;/p>
+&lt;p>以服务器的角度看，它已经完成了对客户端的身份验证，并且完全无法意识到此时的通信中存在着中间人，当身份认证完成后，攻击者可使用服务端下发的认证凭据以客户端的身份调用其对外提供的服务。&lt;/p>
+&lt;p>如果根据 Relay 的对象来区分，可以得出一个结论：工作组环境通常是 Relay 回自身以获得主机权限，域环境较之工作组环境扩充了许多玩法，此时则不仅局限于 Relay 自身，通常还可 Relay 至 DC 以实现其它操作。&lt;/p>
+&lt;p>现假设存在 A、B、C 三台主机，假设 A 和 C 上存在着某个用户名和密码均相同的用户（如 Administrator），攻击者获取到了 B 的权限并且通过某种方式可以让 A 主动发起 SMB 请求，那么攻击者可以在 B 上架设一个恶意的中转 SMB 服务器，此时 B 上获得 A 的 NTLM 认证请求并将其转发至 C 的 SMB 服务（无跨协议），从而获得 C 的主机权限，impacket 的 ntlmrelayx.py 已经很好的集成了 ntlm relay 的大部分玩法：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0auhu0zl3j213r0u043n.jpg"
+loading="lazy"
+alt="image-20220315203522715"
+>&lt;/p>
+&lt;p>上面是我通过 impacket 启动了一个恶意的 SMB 服务，并将认证请求转发给 192.168.2.112（C） 这台主机，成功认证后会在本地创建一个代理，后序我可通过此代理调用目标的 SMB 服务，比如通过 smbexec.py 实现命令执行：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0aukxgzg1j21v20eu79i.jpg"
+loading="lazy"
+alt="image-20220315203821491"
+>&lt;/p>
+&lt;p>看流量图也许能够更好的理解 NTLM Relay：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0atx94hylj226u06in32.jpg"
+loading="lazy"
+alt="image-20220315201536035"
+>&lt;/p>
+&lt;p>在上图中，A 主机（192.168.2.113）向 B 主机（192.168.2.109）发出的消息会被修改（修改部分 Client 信息）后转发到 C 主机（192.168.2.112），随后将 C 主机的响应修改部分信息后转发给 B 主机。&lt;/p>
+&lt;p>上面多次提到了跨协议，为什么 NTLM Relay 能够跨协议呢？&lt;strong>这是因为 NTLM 是一个嵌入式协议，无论对于哪个上层应用来说它的认证方式是不变的，不会受到上层应用的影响，因此当攻击者收到一个 SMB 的 NTLM 认证后，可转发给其它机器的 LDAP 或是其它服务进行认证。&lt;/strong>&lt;/p>
+&lt;h1 id="防御措施">防御措施&lt;/h1>
+&lt;p>上面介绍了 NTLM Relay 的攻击原理与攻击场景，接下来将主要分析微软对于 NTLM Relay 的多种防御措施，其中有几种防御措施相辅相成，相互关联，十分精彩！&lt;/p>
+&lt;h2 id="ms08-068">ms08-068&lt;/h2>
+&lt;p>NTLM Relay 不仅可以 Relay 到其它机器，在工作组环境下也可以 Relay 到发出请求的机器已获得其主机权限，如下图所示：&lt;/p>
+&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0cqdxzrxpj20nu0nimyw.jpg" alt="Ghost_Potato_00.png" style="zoom:75%;" />
+&lt;p>微软在2008年发布了 ms08-068 补丁用于缓解这种 Relay To Self 的场景，它是怎么工作的呢？根据文档描述，SMB 客户端在进行认证时需要循环调用 &lt;a class="link" href="https://docs.microsoft.com/en-us/windows/win32/api/sspi/nf-sspi-initializesecuritycontexta" target="_blank" rel="noopener"
+>&lt;em>InitializeSecurityContext&lt;/em>&lt;/a>直到其返回 SEC_E_OK 才表示认证成功，ms08-068 的修复方式是将调用函数过程中传递的 pszTargetName 由原先的 null 修改为服务端具体服务的SPN，即当我们想访问 &lt;code>\\smb-server\share &lt;/code> 时，此处会被设置为 &lt;code>cifs/smb-server&lt;/code> 。&lt;/p>
+&lt;p>接下来要介绍一下 challenge cache 机制，它是能够防御 Relay To Self 的核心原因，当然需要搭配 pszTargetName 进行使用，下面是被防御的场景，假设 A 是受害者的机器，B 是 攻击者的机器，攻击者通过某种方式让 A 向其发起了 SMB 请求，并希望 Relay To A：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">A --&amp;gt; B --&amp;gt; A-SMB （NEGOTIATE）
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">A-SMB --&amp;gt; B --&amp;gt; A （CHALLENGE），此处当 A 收到 challenge 后，会将 challenge 与 B 的 SPN 一同缓存
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">A --&amp;gt; B --&amp;gt; A-SMB （Response），当 A 的 SMB 服务收到 Response后，会判断 challenge 是否在本地存在，如果存在并且 SPN 不为本机，
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">则认为此次 Response 为 NTLM Relay 转发过来的，因此认证失败
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;h3 id="cve-2019-1384ghost-potato">CVE-2019-1384（Ghost Potato）&lt;/h3>
+&lt;p>CVE-2019-1384 则是用于绕过 ms08-068 的攻击手法，由于缓存至多存在300s，过了300s缓存就会自动被删除，因此只需要将 SMB 的请求一直保持，等待300s后再发送 Response 即可成功绕过 ms08-068 的防御。&lt;/p>
+&lt;img src="https://shenaniganslabs.io/images/Ghost_Potato/Ghost_Potato_05.png" alt="Ghost_Potato_05.png" style="zoom:75%;" />
+&lt;p>微软在 2019年12月11日 发布了修复此漏洞的补丁：&lt;a class="link" href="https://portal.msrc.microsoft.com/en-us/security-guidance/advisory/CVE-2019-1384" target="_blank" rel="noopener"
+>CVE-2019-1384&lt;/a> 。&lt;/p>
+&lt;h2 id="会话签名">会话签名&lt;/h2>
+&lt;p>正如之前说的一样，NTLM 只是身份认证层的实现，当身份认证完毕后，应用层协议会继续使用它们的协议规范进行服务的调用，后续服务调用的过程被称为会话层，会话签名是基于用户 Hash 生成的，因此攻击者无法伪造。&lt;/p>
+&lt;p>当认证完毕后，如果存在客户端与服务的协商的决定是要对后续所有会话进行签名，那么攻击者将无法利用 Relay ，因为攻击者无法修改会话时所调用服务的 Action 或是 Relay 去其它协议，下图是基于会话签名保护的服务调用流程：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bhpdot3kj20rk0j2dh4.jpg"
+loading="lazy"
+alt="Signature d&amp;rsquo;un paquet de session"
+>&lt;/p>
+&lt;p>下图是基于会话签名保护的 NTLM Relay 流程：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bhqfpmyrj20sp0p3dj6.jpg"
+loading="lazy"
+alt="ntlm_session_signing_failed"
+>&lt;/p>
+&lt;p>由于后续攻击者必然想调用自定义的 Action（如 smbexec），但由于攻击者没有办法生成会话签名，因此服务端对签名的校验失败，将拒绝提供服务。&lt;/p>
+&lt;h3 id="smb-signing">SMB Signing&lt;/h3>
+&lt;p>SMB 协议的会话签名是在 SMB 协议中实现的，不涉及 NTLM，是否需要进行签名实际上是客户端与服务端在 NTLM 认证前就已经协商好了的，首先客户端会向服务端发送一条 NEGOTIATE 消息以告知服务端其对签名的处理方式（注意此处的 NEGOTIATE 与 NTLM 无关，是 SMB 协议自己的 NEGOTIATE）：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bi7bmfsxj21c00u0ahj.jpg"
+loading="lazy"
+alt="image-20220316101539136"
+>&lt;/p>
+&lt;p>随后服务端会在 NEGOTIATE Response 中告知其对签名的处理方式：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bi9eimgpj21c00u0gtr.jpg"
+loading="lazy"
+alt="image-20220316101739166"
+>&lt;/p>
+&lt;p>可以发现此时客户端与服务端的处理方式都是 enable，那么它们到底是签名还是不签名呢？微软官方提供了一个矩阵用于确定 客户端、服务端、NTLM 版本为何值时需要进行签名，并且其中包含一系列额外条件，如域控制器是强制签名的之类。&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bibmcn1rj20uy0dswgg.jpg"
+loading="lazy"
+alt="Signing matrix"
+>&lt;/p>
+&lt;p>通过上面的矩阵可以得出本次是否签名的结论，由于此次使用的是 SMBv2 协议，并且对话的双方均不是域控制器，因此后续会话将不进行签名验证。&lt;/p>
+&lt;p>当客户端向域控制器验证身份时是需要签名的，但当域控制器向另外一台域控制器验证身份时则是不需要签名的。&lt;/p>
+&lt;p>总结一下整个流程：&lt;/p>
+&lt;ul>
+&lt;li>对应的上层协议在 NEGOTIATE 消息中告知对方其对签名的处理方式&lt;/li>
+&lt;li>Client 在 NTLM NEGOTIATE 消息中告知 Server 其是否支持签名，Server 在 NTLM Challenge 中告知 Client 其是否支持签名&lt;/li>
+&lt;li>Client 认证完毕，发起后续会话，如果前面一系列的协商结果为需要签名，则 Client 会在后续流量中添加一个 Signature 字段用于签名，Server 与 Client 的处理方式一致&lt;/li>
+&lt;/ul>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bih87eapj20pd0e4adj.jpg"
+loading="lazy"
+alt="Session signing"
+>&lt;/p>
+&lt;h3 id="ldap-signing">LDAP Signing&lt;/h3>
+&lt;p>在调用 LDAP 服务时，客户端与服务端同样有着 3 个选项来协商是否需要进行签名：&lt;/p>
+&lt;ul>
+&lt;li>Disabled：不支持数据包签名&lt;/li>
+&lt;li>Negotiated：可以处理签名，但不要求一定要签名&lt;/li>
+&lt;li>Required：必须对数据包进行签名&lt;/li>
+&lt;/ul>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bsq5t9zgj20us0bxt9w.jpg"
+loading="lazy"
+alt="LDAP signing matrix"
+>&lt;/p>
+&lt;p>LDAP 是在 NTLM 认证时进行签名协商的，首先在 NTLM NEGOTIATE 消息中，客户端会设置 Flag 表示其能够处理签名：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bhvqwb0cj21c00u046t.jpg"
+loading="lazy"
+alt="image-20220316100431400"
+>&lt;/p>
+&lt;p>随后服务端会在 CHALLENGE 消息中设置 Flag 以告知其是否能够处理签名：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bhyp2sy4j21c00u0aie.jpg"
+loading="lazy"
+alt="image-20220316100721872"
+>&lt;/p>
+&lt;p>由于默认情况下除了域控外的所有主机最终的协商均为 Negotiated（两台服务器均能够处理签名），这也表示正常情况下认证完毕后的所有 LDAP 流量均受签名的保护。&lt;/p>
+&lt;p>可以发现 SMB 与 LDAP 的区别，SMB 的签名协商是发生在 SMB 协议上的，而 LDAP 的签名协商则是发生在 NTLM 认证时的，那是否意味着只要攻击者将 Negotiate Sign 设置为 False 即可绕过签名？可惜的是，NTLM 也有自己的消息完整性验证机制，即后文要介绍的 MIC。&lt;/p>
+&lt;h2 id="mic">MIC&lt;/h2>
+&lt;p>MIC（Message Integrity Code）的主要目的是为了保证数据的完整性，即从客户端发出去是什么数据就应该在服务端收到什么数据，它只包含在 NTLM 认证流程中的最后一条消息（AUTHENTICATE）中被发出，算法如下：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">HMAC_MD5(Session key, NEGOTIATE_MESSAGE + CHALLENGE_MESSAGE + AUTHENTICATE_MESSAGE)
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>由于 Session Key 是由用户的 Hash 所加密得到的，这也就意味着攻击者没有办法重新计算 MIC，而 MIC 中包含了三条消息，这也意味着攻击者没有办法修改前两条消息，因为这将导致服务端算出来的 MIC 无法正确校验。&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bteo7rtyj21c00u0n5f.jpg"
+loading="lazy"
+alt="image-20220316164318066"
+>&lt;/p>
+&lt;p>由于 MIC 是可选的，因此在转发数据包的过程中可以将 MIC 删除，但这是无效的，因为在 AUTHENTICATE 消息中还存在一个 msAvFlags，用于告知服务器是否要校验 MIC，当 msAvFlags 为 &lt;strong>0x00000002&lt;/strong> 且服务器未收到 MIC 时，此次认证将被判定为失败：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0bthj2n0zj21c00u07br.jpg"
+loading="lazy"
+alt="image-20220316164602560"
+>&lt;/p>
+&lt;p>遗憾的是，攻击者无法将此 Flag 设为 &lt;strong>0x00000000&lt;/strong> 以绕过 MIC，这是由于 Flag 参与了计算 NTProofStr 的过程，它也是整个加密字符串中的一部分，因此如果修改了此 Flag，则最终服务端将无法正确验证 NTProofStr，同样将导致认证失败。&lt;/p>
+&lt;p>MIC 保护了三条消息的完整性，而 msAvFlags（&lt;strong>0x00000002&lt;/strong>）则保证了 MIC 的存在，此时由于攻击者不知道认证用户的 NTLM-Hash，因此他什么也做不了。&lt;/p>
+&lt;h3 id="cve-2019-1040">CVE-2019-1040&lt;/h3>
+&lt;p>&lt;a class="link" href="https://www.crowdstrike.com/" target="_blank" rel="noopener"
+>Preempt&lt;/a> 团队发现了一个用于绕过 MIC 校验机制的漏洞，编号为 CVE-2019-1040，也被称为 Drop the MIC，此漏洞已经被集成于 impacket 中，只需要再调用 ntlmrelayx 时添加一个 &amp;ndash;remove-mic 参数即可使用，具体调用代码如下：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-python" data-lang="python">&lt;span class="line">&lt;span class="cl">&lt;span class="k">if&lt;/span> &lt;span class="bp">self&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">serverConfig&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">remove_mic&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">NTLMAuthChallengeResponse&lt;/span>&lt;span class="p">()&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">fromString&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">authenticateMessageBlob&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">&amp;amp;&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_SIGN&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_SIGN&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">^=&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_SIGN&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">&amp;amp;&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_ALWAYS_SIGN&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_ALWAYS_SIGN&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">^=&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_ALWAYS_SIGN&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">&amp;amp;&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_KEY_EXCH&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_KEY_EXCH&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">^=&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_KEY_EXCH&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">&amp;amp;&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_VERSION&lt;/span> &lt;span class="o">==&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_VERSION&lt;/span>&lt;span class="p">:&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;flags&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">^=&lt;/span> &lt;span class="n">NTLMSSP_NEGOTIATE_VERSION&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;MIC&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="sa">b&lt;/span>&lt;span class="s1">&amp;#39;&amp;#39;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;MICLen&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="mi">0&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;Version&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="sa">b&lt;/span>&lt;span class="s1">&amp;#39;&amp;#39;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">authMessage&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s1">&amp;#39;VersionLen&amp;#39;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="mi">0&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>通过置空（置零）的方式删除了 NTLM_AUTHENTICATE 消息中的 MIC、MICLen、Version、VersionLen 字段，此时即可成功的绕过 服务端对于 MIC 的校验。&lt;/p>
+&lt;p>通过同样的方式删除（置零）了 NTLM_NEGOTIATE 消息中的 NTLMSSP_NEGOTIATE_ALWAYS_SIGN、NTLMSSP_NEGOTIATE_SIGN 和 NTLM_AUTHENTICATE 消息中的 NTLMSSP_NEGOTIATE_ALWAYS_SIGN、NTLMSSP_NEGOTIATE_SIGN、NEGOTIATE_KEY_EXCHANGE、NEGOTIATE_VERSION 字段，&lt;strong>由于没有了 MIC，服务端不会对三条消息是否被篡改过进行验证，从而绕过 LDAP 签名实现 relay to LDAP。&lt;/strong>&lt;/p>
+&lt;h2 id="epa">EPA&lt;/h2>
+&lt;p>&lt;strong>为了对抗跨协议 Relay 使 NTLM Relay 的危害降级&lt;/strong>，微软引入了被称为 EPA 的保护措施，这种保护的原理是将身份验证层与正在使用的协议绑定在一起，甚至与存在的 TLS 层绑定在一起(例如 LDAPS 或 HTTPS)，一般情况下，&lt;strong>它将在最后一条 AUTHENTICATE 消息中放置一条信息，攻击者无法修改它，此信息指明了本次调用的服务（SMB、HTTP、LDAP）以及可能包含的证书等其它信息，EPA 通过服务绑定和 TLS 绑定两种方式防御跨协议 Relay。&lt;/strong>&lt;/p>
+&lt;h3 id="service-binding">Service Binding&lt;/h3>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0buq49fvuj21c00u048e.jpg"
+loading="lazy"
+alt="image-20220316172854322"
+>&lt;/p>
+&lt;p>如上图所示，Client 在 AUTHENTICATE 消息的 Response 中加入了 Target Name 这么一个属性，其中包含了 Client 想要调用的服务以及对应的 Client HostName，它也参与了 NTProofStr 的加密（可以理解为受到 NTProofStr 的保护），因此攻击者无法修改这个属性。&lt;/p>
+&lt;p>因此如果攻击者想调用的服务收到了此消息，并且它发现了自身提供的服务与 AUTHENTICATE 消息中的不同，那么就会拒绝提供服务，除此之外，Server 还将检查此次服务调用的 IP 与属性中是否一致，如果不一致同样会拒绝提供服务，&lt;strong>幸运的是目前 EPA 并不是作为默认情况被使用，如果需要使用这种保护措施需要手动设置，参考 KB5005413。&lt;/strong>&lt;/p>
+&lt;h3 id="tls-binding">TLS Binding&lt;/h3>
+&lt;p>如果客户端希望与封装在 TLS 中的协议如 HTTPS、LDAPS 建立会话，那么它将计算服务端的证书 Hash，并将此 Hash 存放在 Response 中，攻击者无法修改此属性，因此当攻击者尝试进行 relay 攻击时，&lt;strong>服务端发现 Response 中的 Hash 与自身不符（如 HTTPS relay LDAPS），或是服务端没有使用 TLS（LDAP、SMB）却在 Response 中发现了 证书 Hash（SMB relay LDAPS、SMB relay HTTPS &amp;hellip;），在遇到这两种情况时服务端都将拒绝提供服务。&lt;/strong>&lt;/p>
+&lt;h3 id="epa-bypass">EPA &amp;ldquo;Bypass&amp;rdquo;&lt;/h3>
+&lt;p>网上目前流传了两篇文章用于介绍如何绕过 EPA 的，一篇是 &lt;a class="link" href="https://www.geekby.site/2020/05/ntlm-%E4%B8%AD%E9%97%B4%E4%BA%BA%E6%94%BB%E5%87%BB/#5-epa-bypass" target="_blank" rel="noopener"
+>geekby&lt;/a> 另一篇则是 &lt;a class="link" href="https://www.crowdstrike.com/blog/bypass-epa-ntlm-attacks-wia/" target="_blank" rel="noopener"
+>bypass-epa-ntlm-attacks-wia&lt;/a> ，说实话我不能理解为什么这被称为 Bypass，因为这种 Bypass 方式需要攻击者拥有用户哈希为前提的，但如果我有用户哈希了，为什么还要使用 NTLM Relay 呢？不过我倒是搜到了一个 CVE-2020-17162，关于这个漏洞网上还没有任何细节。&lt;/p>
+&lt;blockquote>
+&lt;p>It is a bypass of Extended Protection for Authentication(EPA) where Service Principle Name could allow Windows store UAP applications to elevate privileges.&lt;/p>
+&lt;/blockquote>
+&lt;h1 id="reference">Reference&lt;/h1>
+&lt;ul>
+&lt;li>&lt;a class="link" href="https://docs.microsoft.com/zh-cn/openspecs/windows_protocols/ms-nlmp/b38c36ed-2804-4868-a9ff-8dd3182128e4" target="_blank" rel="noopener"
+>NT LAN Manager (NTLM) Authentication Protocol&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="https://shenaniganslabs.io/2019/11/12/Ghost-Potato.html" target="_blank" rel="noopener"
+>Ghost-Potato&lt;/a>&lt;/li>
+&lt;li>&lt;a class="link" href="https://en.hackndo.com/ntlm-relay/" target="_blank" rel="noopener"
+>NTLM Relay&lt;/a>&lt;/li>
+&lt;/ul></description></item></channel></rss>
