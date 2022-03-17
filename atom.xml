@@ -412,6 +412,11 @@ alt="image-20220316172854322"
 &lt;blockquote>
 &lt;p>It is a bypass of Extended Protection for Authentication(EPA) where Service Principle Name could allow Windows store UAP applications to elevate privileges.&lt;/p>
 &lt;/blockquote>
+&lt;h2 id="总结">总结&lt;/h2>
+&lt;p>上面记录了能够防御 NTLM Relay 的四种方式，其中 ms08-068 阻止了攻击者 Relay To Self 的操作，而剩余三个防御均是用来防御 Relay To Other（Or Protocol）的操作，EPA 较之签名来说防御的更加全面一些，因此如果想真正做到完美防御 NTLM Relay，建议直接使用 EPA 作为防御机制，以及一处不知道是否已经实施的安全通告。&lt;/p>
+&lt;blockquote>
+&lt;p>微软于 2019-09-11 日发布相关通告称微软计划于 2020 年 1 月发布安全更新。为了提升域控制器的安全性，该安全更新将强制开启所有域控制器上 LDAP channel binding 与 LDAP signing 功能。&lt;/p>
+&lt;/blockquote>
 &lt;h1 id="reference">Reference&lt;/h1>
 &lt;ul>
 &lt;li>&lt;a class="link" href="https://docs.microsoft.com/zh-cn/openspecs/windows_protocols/ms-nlmp/b38c36ed-2804-4868-a9ff-8dd3182128e4" target="_blank" rel="noopener"
