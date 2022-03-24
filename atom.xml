@@ -1,4 +1,414 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>今日明月夜</title><link>https://tlmn-local.github.io/</link><description>Recent content on 今日明月夜</description><generator>Hugo -- gohugo.io</generator><language>en-us</language><lastBuildDate>Thu, 17 Mar 2022 16:27:29 +0800</lastBuildDate><atom:link href="https://tlmn-local.github.io/atom.xml" rel="self" type="application/rss+xml"/><item><title>NTLM Protocol</title><link>https://tlmn-local.github.io/2022/03/17/ntlm-protocol/</link><pubDate>Thu, 17 Mar 2022 16:27:29 +0800</pubDate><guid>https://tlmn-local.github.io/2022/03/17/ntlm-protocol/</guid><description>&lt;h1 id="概述">概述&lt;/h1>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>今日明月夜</title><link>https://tlmn-local.github.io/</link><description>Recent content on 今日明月夜</description><generator>Hugo -- gohugo.io</generator><language>en-us</language><lastBuildDate>Thu, 24 Mar 2022 17:59:34 +0800</lastBuildDate><atom:link href="https://tlmn-local.github.io/atom.xml" rel="self" type="application/rss+xml"/><item><title>Kerberos Protocol</title><link>https://tlmn-local.github.io/2022/03/24/kerberos-protocol/</link><pubDate>Thu, 24 Mar 2022 17:59:34 +0800</pubDate><guid>https://tlmn-local.github.io/2022/03/24/kerberos-protocol/</guid><description>&lt;h1 id="概述">概述&lt;/h1>
+&lt;p>Kerberos 提供了一种在不受保护网络上验证主体（用户或网络服务器）身份的方法，这种认证方式不依赖于操作系统、主机之间的相互信任，并且假设身份认证能够在数据包沿网络传递过程中可随意读取、篡改的情况下不受影响。&lt;/p>
+&lt;p>需要注意的是，作为一种身份验证服务，Kerberos 提供了一种验证网络上主体身份的方法，主要是作为授权过程中的第一步，确认客户端的身份是否正确，&lt;strong>Kerberos 本身并不提供授权&lt;/strong>。&lt;/p>
+&lt;p>为了保证认证在安全的情况下顺利进行，Kerberos 对其能够正常工作的环境有一定要求：&lt;/p>
+&lt;ul>
+&lt;li>不存在拒绝服务攻击（DOS）&lt;/li>
+&lt;li>密钥必须保密（攻击者在无密钥的情况下无法顺利通过认证）&lt;/li>
+&lt;li>用户的密码必须足够强大&lt;/li>
+&lt;li>网络上的主机间需有一个与其它主机时间的松散同步时钟，并且时钟同步必须能够保证安全&lt;/li>
+&lt;/ul>
+&lt;p>&lt;strong>注：本文仅介绍 Kerberos 在 Microsoft Windows Domain 中的使用情况，Unix 下的使用场景不会在本文中进行介绍。&lt;/strong>&lt;/p>
+&lt;h1 id="组件">组件&lt;/h1>
+&lt;p>在 Kerberos 身份认证过程中有多方参与，其中包含了多个认证主体、密钥和服务，为了避免后续实际分析协议流程时被绕晕，我决定先介绍每个参与认证的组件。&lt;/p>
+&lt;h2 id="主体">主体&lt;/h2>
+&lt;p>与常规的认证主体不同，Kerberos 不仅包含客户端与服务端，还包含了一个受信任的第三方，完整的主体名单如下：&lt;/p>
+&lt;ul>
+&lt;li>客户端（想要调用某项服务的用户）&lt;/li>
+&lt;li>提供服务的应用服务器&lt;/li>
+&lt;li>&lt;strong>KDC&lt;/strong> (Key Distribution Center)，Kerberos 的主要服务，负责签发票证，通常安装在 DC 上，其中包含 AS 服务与 TGS 服务&lt;/li>
+&lt;/ul>
+&lt;h2 id="密钥">密钥&lt;/h2>
+&lt;p>Kerberos 认证流程中涉及到了许多数据的加解密，其中使用到的密钥类型如下：&lt;/p>
+&lt;ul>
+&lt;li>用户密钥（认证用户的哈希）&lt;/li>
+&lt;li>服务密钥（服务所属者的哈希）&lt;/li>
+&lt;li>某些特殊情况下需要用到的子密钥&lt;/li>
+&lt;li>krbtgt 密钥（域账户 krbtgt 的哈希）&lt;/li>
+&lt;li>用户与服务通信时使用的服务通信密钥&lt;/li>
+&lt;li>用户与 KDC 通信时使用的 KDC 通信密钥&lt;/li>
+&lt;/ul>
+&lt;h2 id="票证">票证&lt;/h2>
+&lt;p>Kerberos 基于票证实现完整的身份认证功能，其中主要包含两种类型的票证：&lt;/p>
+&lt;ul>
+&lt;li>TGT（Ticket Granting Ticket）是提交给 KDC 以请求 TGS 的票证，&lt;strong>使用 krbtgt 密钥加密&lt;/strong>&lt;/li>
+&lt;li>ST （Service Ticket）是用户可用于对服务进行身份验证的票证，&lt;strong>使用服务密钥加密&lt;/strong>&lt;/li>
+&lt;/ul>
+&lt;h2 id="消息">消息&lt;/h2>
+&lt;p>Kerberos 的通信过程中使用了不同类型的消息（&lt;strong>AS 和 TGS 有时也以 KDC 作为统称，下面的描述中对其进行了细分&lt;/strong>）：&lt;/p>
+&lt;ul>
+&lt;li>KRB_AS_REQ : 客户端向 AS 验证身份以获取 TGT&lt;/li>
+&lt;li>KRB_AS_REP : AS 将 TGT 返回给客户端&lt;/li>
+&lt;li>KRB_TGS_REQ : 客户端使用 TGT 向 TGS 请求 ST&lt;/li>
+&lt;li>KRB_TGS_REP : TGS 将 ST 返回给客户端&lt;/li>
+&lt;li>KRB_AP_REQ : 客户端使用 ST 向服务验证身份&lt;/li>
+&lt;li>KRB_AP_REP : 服务向客户端验证身份或返回错误信息&lt;/li>
+&lt;li>KRB_ERROR : 返回在 Kerberos 认证过程中的错误信息&lt;/li>
+&lt;/ul>
+&lt;h2 id="结构">结构&lt;/h2>
+&lt;p>Kerberos 在通信过程中传递的消息大部分具有固定结构，此处先列出部分通信过程中使用到的结构，以便后续能够对认证流程有更为详细的认知。&lt;/p>
+&lt;h3 id="krb_kdc_req">KRB_KDC_REQ&lt;/h3>
+&lt;p>此结构是 KRB_AS_REQ 与 KRB_TGS_REQ 所使用的完整结构，两个消息共用一个结构体，并分别使用此结构体中的部分字段。&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">AS-REQ ::= [APPLICATION 10] KDC-REQ
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">TGS-REQ ::= [APPLICATION 12] KDC-REQ
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">KDC-REQ ::= SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- NOTE: first tag is [1], not [0]
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> pvno [1] INTEGER (5) ,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> msg-type [2] INTEGER (10 -- AS -- | 12 -- TGS --),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> padata [3] SEQUENCE OF PA-DATA OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- NOTE: not empty --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> req-body [4] KDC-REQ-BODY
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">KDC-REQ-BODY ::= SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> kdc-options [0] KDCOptions,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cname [1] PrincipalName OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Used only in AS-REQ --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> realm [2] Realm
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Server&amp;#39;s realm
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- Also client&amp;#39;s in AS-REQ --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> sname [3] PrincipalName OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> from [4] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> till [5] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> rtime [6] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> nonce [7] UInt32,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> etype [8] SEQUENCE OF Int32 -- EncryptionType
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- in preference order --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> addresses [9] HostAddresses OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> enc-authorization-data [10] EncryptedData OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- AuthorizationData --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> additional-tickets [11] SEQUENCE OF Ticket OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- NOTE: not empty
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">}
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">KDCOptions ::= KerberosFlags
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- reserved(0),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- forwardable(1),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- forwarded(2),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- proxiable(3),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- proxy(4),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- allow-postdate(5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- postdated(6),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused7(7),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- renewable(8),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused9(9),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused10(10),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- opt-hardware-auth(11),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused12(12),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused13(13),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">-- 15 is reserved for canonicalize
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused15(15),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">-- 26 was unused in 1510
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- disable-transited-check(26),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">--
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- renewable-ok(27),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- enc-tkt-in-skey(28),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- renew(30),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- validate(31)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- opt-hardware-auth(11),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused12(12),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused13(13),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">-- 15 is reserved for canonicalize
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- unused15(15),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">-- 26 was unused in 1510
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- disable-transited-check(26),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">--
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- renewable-ok(27),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- enc-tkt-in-skey(28),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- renew(30),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- validate(31)
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;ul>
+&lt;li>
+&lt;p>pvno : 当前通信所使用的 Kerberos 版本号&lt;/p>
+&lt;/li>
+&lt;li>
+&lt;p>msg-type : 当前消息类型（AS || TGS）&lt;/p>
+&lt;/li>
+&lt;li>
+&lt;p>padata (PreAuthentication Data) : 用于存放消息中的认证数据&lt;/p>
+&lt;/li>
+&lt;li>
+&lt;p>req-body ：请求体结构&lt;/p>
+&lt;ul>
+&lt;li>kdc-options : 通信时设置的 Flag&lt;/li>
+&lt;li>cname : 认证用户名称&lt;/li>
+&lt;li>realm : 认证客户端所处域名（在 KRB_TGS_REQ 中表示调用服务端所处域）&lt;/li>
+&lt;li>sname : 与当前调用服务绑定的 SPN&lt;/li>
+&lt;li>nonce : 由客户端创建的随机数，用于验证 KDC 身份，防止恶意攻击&lt;/li>
+&lt;li>etype : 支持的加密函数&lt;/li>
+&lt;li>address : 客户端主机名&lt;/li>
+&lt;li>enc-authorization-data : 加密的授权数据&lt;/li>
+&lt;li>additional-tickets : 附加票证&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;h3 id="krb_kdc_rep">KRB_KDC_REP&lt;/h3>
+&lt;p>此结构是 KRB_AS_REP 与 KRB_TGS_REP 所使用的结构体，两个消息共用一个结构体，并分别使用此结构体中的部分字段。&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">AS-REP ::= [APPLICATION 11] KDC-REP
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">TGS-REP ::= [APPLICATION 13] KDC-REP
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">KDC-REP ::= SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> pvno [0] INTEGER (5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> msg-type [1] INTEGER (11 -- AS -- | 13 -- TGS --),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> padata [2] SEQUENCE OF PA-DATA OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- NOTE: not empty --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> crealm [3] Realm,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cname [4] PrincipalName,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ticket [5] Ticket,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> enc-part [6] EncryptedData
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- EncASRepPart or EncTGSRepPart,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- as appropriate
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">EncASRepPart ::= [APPLICATION 25] EncKDCRepPart
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">EncTGSRepPart ::= [APPLICATION 26] EncKDCRepPart
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">EncKDCRepPart ::= SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> key [0] EncryptionKey,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> last-req [1] LastReq,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> nonce [2] UInt32,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> key-expiration [3] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> flags [4] TicketFlags,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> authtime [5] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> starttime [6] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> endtime [7] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> renew-till [8] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> srealm [9] Realm,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> sname [10] PrincipalName,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> caddr [11] HostAddresses OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">LastReq ::= SEQUENCE OF SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> lr-type [0] Int32,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> lr-value [1] KerberosTime
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;ul>
+&lt;li>crealm : 认证客户端所处域名&lt;/li>
+&lt;li>ticket : 使用密钥加密的 Ticket 结构体&lt;/li>
+&lt;li>enc-part : 使用密钥加密的 EncKDCRepPart 结构体
+&lt;ul>
+&lt;li>key : 会话密钥&lt;/li>
+&lt;li>nonce : 客户端生成的随机数&lt;/li>
+&lt;li>key-expiration : 会话密钥到期时间&lt;/li>
+&lt;li>flags : ticket 的部分属性设置&lt;/li>
+&lt;li>authtime : 认证时间&lt;/li>
+&lt;li>starttime : 票证起始有效时间&lt;/li>
+&lt;li>endtime : 票证无效时间&lt;/li>
+&lt;li>srealm : 服务端所处域名&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;h3 id="krb_ap_req">KRB_AP_REQ&lt;/h3>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">AP-REQ ::= [APPLICATION 14] SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> pvno [0] INTEGER (5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> msg-type [1] INTEGER (14),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ap-options [2] APOptions,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ticket [3] Ticket,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> authenticator [4] EncryptedData -- Authenticator
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">APOptions ::= KerberosFlags
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- reserved(0),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- use-session-key(1),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- mutual-required(2)
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">Authenticator ::= [APPLICATION 2] SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> authenticator-vno [0] INTEGER (5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> crealm [1] Realm,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cname [2] PrincipalName,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cksum [3] Checksum OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cusec [4] Microseconds,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ctime [5] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> subkey [6] EncryptionKey OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> seq-number [7] UInt32 OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> authorization-data [8] AuthorizationData OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;ul>
+&lt;li>authenticator : 使用密钥加密的 Authenticator 结构体
+&lt;ul>
+&lt;li>cksum : 校验和&lt;/li>
+&lt;li>subkey : 子密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;h3 id="krb_ap_rep">KRB_AP_REP&lt;/h3>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">AP-REP ::= [APPLICATION 15] SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> pvno [0] INTEGER (5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> msg-type [1] INTEGER (15),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> enc-part [2] EncryptedData -- EncAPRepPart
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">EncAPRepPart ::= [APPLICATION 27] SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ctime [0] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cusec [1] Microseconds,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> subkey [2] EncryptionKey OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> seq-number [3] UInt32 OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;ul>
+&lt;li>enc-part : 使用密钥加密的 EncAPRepPart 结构体&lt;/li>
+&lt;/ul>
+&lt;h3 id="ticket">Ticket&lt;/h3>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">Ticket ::= [APPLICATION 1] SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> tkt-vno [0] INTEGER (5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> realm [1] Realm,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> sname [2] PrincipalName,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> enc-part [3] EncryptedData -- EncTicketPart
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">EncTicketPart ::= [APPLICATION 3] SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> flags [0] TicketFlags,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> key [1] EncryptionKey,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> crealm [2] Realm,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> cname [3] PrincipalName,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> transited [4] TransitedEncoding,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> authtime [5] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> starttime [6] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> endtime [7] KerberosTime,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> renew-till [8] KerberosTime OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> caddr [9] HostAddresses OPTIONAL,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> authorization-data [10] AuthorizationData OPTIONAL
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">TransitedEncoding ::= SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> tr-type [0] Int32 -- must be registered --,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> contents [1] OCTET STRING
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">TicketFlags ::= KerberosFlags
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- reserved(0),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- forwardable(1),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- forwarded(2),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- proxiable(3),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- proxy(4),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- may-postdate(5),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- postdated(6),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- invalid(7),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- renewable(8),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- initial(9),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- pre-authent(10),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- hw-authent(11),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- the following are new since 1510
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- transited-policy-checked(12),
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> -- ok-as-delegate(13)
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;ul>
+&lt;li>enc-part : 使用密钥加密的 EncTicketPart 结构体
+&lt;ul>
+&lt;li>key : 会话密钥&lt;/li>
+&lt;li>crealm : 票证作用域名&lt;/li>
+&lt;li>cname : 票证所属用户名&lt;/li>
+&lt;li>authorization-data : 插入在票证中的授权数据，&lt;strong>微软的实现中插入的是由密钥加密的认证用户特权证书&lt;/strong>&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;h3 id="authorizationdata">AuthorizationData&lt;/h3>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">AuthorizationData ::= SEQUENCE OF SEQUENCE {
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ad-type [0] Int32,
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> ad-data [1] OCTET STRING
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> }
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;ul>
+&lt;li>ad-type : 授权类型&lt;/li>
+&lt;li>ad-data : 授权数据&lt;/li>
+&lt;/ul>
+&lt;h2 id="特权证书">特权证书&lt;/h2>
+&lt;p>特权证书（PAC）是微软对 Kerberos 进行扩展后实现的，其包含用户的权限，并使用 krbtgt 密钥进行签名，最终被包含在 KDC 颁发的票证中，服务可以通过与 KDC 通信对 PAC 进行验证，&lt;strong>但此处只会检查 PAC 是否被篡改，而不会检查其中包含的权限是否正确。&lt;/strong>&lt;/p>
+&lt;p>&lt;strong>注：用户可在 KRB_AS_REQ 的 padata 中设置 Flag 表明不需要在 Ticket 中包含 PAC 。&lt;/strong>&lt;/p>
+&lt;h1 id="认证流程">认证流程&lt;/h1>
+&lt;p>本章将通过模拟 Kerberos 认证场景来分析 Kerberos 认证细节，强烈建议看完 0x01 中组件的分析再来看这一部分，能够更加直观的了解认证细节。&lt;/p>
+&lt;p>某次完整的 Kerberos 认证所发出的消息如下：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4d6h1gqj22ri09wn1o.jpg"
+loading="lazy"
+alt="image-20220324160913525"
+>&lt;/p>
+&lt;p>其中 192.168.10.36 作为客户端向 192.168.10.35 请求 SMB 服务调用，192.168.10.34 为 DC 所属 IP。&lt;/p>
+&lt;h2 id="krb_as_req">KRB_AS_REQ&lt;/h2>
+&lt;p>此消息用于向 AS 服务验证身份并请求 TGT ，有两种验证模式，区别为是否使用了预认证模式。为了实现兼容，Kerberos 5 中默认会先发送一个不带预认证数据的 KRB_AS_REQ ，如果认证用户不支持这种认证模式则 KDC 会通过 KRB_ERROR 消息返回具体错误，此时客户端会将预认证数据加入到 KRB_AS_REQ 中再次发送请求。&lt;/p>
+&lt;p>由于使用预认证数据的是较为通用的场景，因此本节着重分析实验了预认证数据的认证模式，另外一种不使用预认证数据的认证模式留待后续 Kerberos 安全隐患章节中再进行分析。&lt;/p>
+&lt;p>&lt;strong>在使用了预认证数据的场景中，客户端首先会使用用户密钥加密一个时间戳并将其加入到 padata 字段中，与其一同加入到还有 pA-PAC-REQUEST 这个属性，前者为了向 KDC 验证身份，后者则是设置是否需要在 Ticket 中包含 PAC。&lt;/strong>&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4d47gr6j21zp0u0jwu.jpg"
+loading="lazy"
+alt="image-20220324161721347"
+>&lt;/p>
+&lt;h2 id="krb_as_rep">KRB_AS_REP&lt;/h2>
+&lt;p>AS 服务收到 KRB_AS_REQ 请求后，首先在活动目录中查找认证用户对应到哈希并使用其作为密钥解密 padata 中的 pA-ENC-TIMESTAMP，如果解密失败则代表认证失败；解密成功后获得一个时间戳，接着用本地时间与时间戳相减得到一个差值，如果此差值在允许范围内则认证成功。&lt;/p>
+&lt;p>认证成功后将会生成两个重要的结构体，一个是 TGT ，另一个则是 EncKDCRepPart ，&lt;strong>前者使用 krbtgt 密钥加密，后者使用用户密钥加密，两个结构体均包含一个相同的 KDC 会话密钥&lt;/strong>；如果在 KRB_AS_REQ 中 pA-PAC-REQUEST 设为 true ，还会将用户的 PAC 放置在 TGT 中。&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4d0t3toj222y0u0q8l.jpg"
+loading="lazy"
+alt="image-20220324162705486"
+>&lt;/p>
+&lt;h2 id="krb_tgs_req">KRB_TGS_REQ&lt;/h2>
+&lt;p>客户端收到 KRB_AS_REP 后，首先使用用户密钥解密 EncKDCRepPart 获得 KDC 会话密钥，并判断 EncKDCRepPart 中的 nonce 是否与 KRB_AS_REQ 中的一致；随后创建一个 AP-REQ 结构体，&lt;strong>使用 KDC 会话密钥加密其中的 Authenticator，最后将与调用服务向绑定的 SPN 封装入 req-body 的 sname 中&lt;/strong>，并封装为 KRB_TGS_REQ 消息发送给 TGS 服务以换取 ST。&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4czeqw0j21tj0u0jvq.jpg"
+loading="lazy"
+alt="image-20220324164755762"
+>&lt;/p>
+&lt;p>其中的 nonce 作用与前文一致，用于在 ST 的申请过程中校验 TGS 服务的身份（&lt;strong>如果 TGS 服务是伪造的，那么它无法加密对应的 EncKDCRepPart，因为其没有用户密钥&lt;/strong>）；可以注意到此处还包含一个奇怪的 enc-authorizatfion-data ，不必惊讶，这是一个额外字段，某些应用程序在认证时需要用到此字段，&lt;strong>其由 authenticator 中的 subkey 进行加密。&lt;/strong>&lt;/p>
+&lt;h2 id="krb_tgs_rep">KRB_TGS_REP&lt;/h2>
+&lt;p>当 TGS 服务收到 KRB_TGS_REQ 后，&lt;strong>首先使用 krbtgt 密钥解密 TGT 从而获得先前协商的 KDC 会话密钥，随后使用 KDC 会话密钥解密 authenticator 字段，并利用其中的 subkey 解密 enc-authorizatfion-data 。&lt;/strong>&lt;/p>
+&lt;p>如果三者都能解密成功，则会进行一系列的校验，包括 TGT 是否过期，数据包是否被篡改等等；校验通过后 TGS 会提取出 req-body 中的 sname，&lt;strong>并在活动目录中寻找服务账户对应的哈希，以此为密钥加密 ST，如果 TGT 中存在 PAC，则将 PAC 同样放置到 ST 中，同时还将使用 KDC 会话密钥生成 EncKDCRepPart 结构体，其中包含了后续调用服务时需要用上的服务会话密钥（ST 中同样包含）&lt;/strong>。&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4cy5u8dj22fn0u0dm4.jpg"
+loading="lazy"
+alt="image-20220324165618219"
+>&lt;/p>
+&lt;h2 id="krb_ap_req-1">KRB_AP_REQ&lt;/h2>
+&lt;p>当客户端收到 KRB_TGS_REP 后，&lt;strong>首先使用 KDC 会话密钥解密 EncTGSRepPart ，校验其中的 nonce 是否与客户端设置的 nonce 一致；校验成功后从 EncTGSRepPart 中提取出服务会话密钥，使用服务会话密钥加密 Authenticator 以此向服务端验证身份，并将 ST 与 Authenticator 一同发送给服务端。&lt;/strong>&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4cwaw5hj21rl0u0ag9.jpg"
+loading="lazy"
+alt="image-20220324170821520"
+>&lt;/p>
+&lt;h2 id="krb_ap_rep可选">KRB_AP_REP（可选）&lt;/h2>
+&lt;p>服务端收到 KRB_AP_REQ 后，&lt;strong>首先使用其服务密钥解密 ST ，从中提取出服务会话密钥，并尝试使用服务会话密钥解密 Authenticator ，如果解密成功则代表客户端的身份验证成功，此时则根据 ST 中的 PAC 对用户权限进行判断，如其拥有足够的权限则向其提供服务。&lt;/strong>&lt;/p>
+&lt;p>KRB_AP_REP 是可选的，多用于传递错误信息或由服务端向客户端验证身份（nonce）：&lt;/p>
+&lt;p>&lt;img src="https://tva1.sinaimg.cn/large/e6c9d24ely1h0l4cupmsjj22kh0u0aik.jpg"
+loading="lazy"
+alt="image-20220324171233123"
+>&lt;/p>
+&lt;h1 id="总结">总结&lt;/h1>
+&lt;p>上面一串流程下来也许会觉得很绕，毕竟其中使用了大量的临时会话密钥与加密密钥，同时还用上了许多不同的结构体，接下来简单梳理一下每个密钥都是在哪生成、在哪使用的。&lt;/p>
+&lt;ul>
+&lt;li>KRB_AS_REQ
+&lt;ul>
+&lt;li>使用了用户密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>KRB_AS_REP
+&lt;ul>
+&lt;li>使用了用户密钥&lt;/li>
+&lt;li>使用了 krbtgt 密钥&lt;/li>
+&lt;li>生成了 KDC 会话密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>KRB_TGS_REQ
+&lt;ul>
+&lt;li>使用了用户密钥&lt;/li>
+&lt;li>使用了 KDC 会话密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>KRB_TGS_REP
+&lt;ul>
+&lt;li>使用了 KDC 会话密钥&lt;/li>
+&lt;li>生成了服务会话密钥&lt;/li>
+&lt;li>使用了 krbtgt 密钥&lt;/li>
+&lt;li>使用了服务密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>KRB_AP_REQ
+&lt;ul>
+&lt;li>使用了 KDC 会话密钥&lt;/li>
+&lt;li>使用了服务会话密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;li>KRB_AP_REP
+&lt;ul>
+&lt;li>使用了服务会话密钥&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;p>仔细看完后感觉 Kerberos 之所以复杂并不仅仅在于其加密流程，而在于其每一次通信都存在着大量的加解密、两端身份的相互验证、消息的保密性，同时还需要确保 TGT 和 ST 的安全性、完整性等，只能说设计这个协议的团队真的太 🐮🍺 辣！&lt;/p></description></item><item><title>NTLM Protocol</title><link>https://tlmn-local.github.io/2022/03/17/ntlm-protocol/</link><pubDate>Thu, 17 Mar 2022 16:27:29 +0800</pubDate><guid>https://tlmn-local.github.io/2022/03/17/ntlm-protocol/</guid><description>&lt;h1 id="概述">概述&lt;/h1>
 &lt;p>NTLM 是 Windows 众多认证协议之一，早期曾是 Windows 主要的认证方式，即使在后来 Kerberos 取代了 NTLM 作为首选的身份认证协议，但还是有很多场景必然需要使用到 NTLM 进行身份认证，包括但不限于：&lt;/p>
 &lt;ul>
 &lt;li>其中一方不支持 Kerberos&lt;/li>
