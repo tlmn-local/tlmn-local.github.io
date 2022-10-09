@@ -1,4 +1,45 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>今日明月夜</title><link>https://tlmn-local.github.io/</link><description>Recent content on 今日明月夜</description><generator>Hugo -- gohugo.io</generator><language>en-us</language><lastBuildDate>Mon, 10 Oct 2022 00:40:48 +0800</lastBuildDate><atom:link href="https://tlmn-local.github.io/atom.xml" rel="self" type="application/rss+xml"/><item><title>小技巧 MAC 下的 DNS 配置</title><link>https://tlmn-local.github.io/2022/10/10/%E5%B0%8F%E6%8A%80%E5%B7%A7-mac-%E4%B8%8B%E7%9A%84-dns-%E9%85%8D%E7%BD%AE/</link><pubDate>Mon, 10 Oct 2022 00:40:48 +0800</pubDate><guid>https://tlmn-local.github.io/2022/10/10/%E5%B0%8F%E6%8A%80%E5%B7%A7-mac-%E4%B8%8B%E7%9A%84-dns-%E9%85%8D%E7%BD%AE/</guid><description>&lt;p>在学习内网渗透或实战中必然需要配置机器的 DNS 以实现访问域环境，这里提供两个在 MacOS 中配置 DNS 的方案。&lt;/p>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>今日明月夜</title><link>https://tlmn-local.github.io/</link><description>Recent content on 今日明月夜</description><generator>Hugo -- gohugo.io</generator><language>en-us</language><lastBuildDate>Mon, 10 Oct 2022 00:51:57 +0800</lastBuildDate><atom:link href="https://tlmn-local.github.io/atom.xml" rel="self" type="application/rss+xml"/><item><title>Pass the Hash &amp;&amp; Pass the Key</title><link>https://tlmn-local.github.io/2022/10/10/pass-the-hash-pass-the-key/</link><pubDate>Mon, 10 Oct 2022 00:51:57 +0800</pubDate><guid>https://tlmn-local.github.io/2022/10/10/pass-the-hash-pass-the-key/</guid><description>&lt;h1 id="0x00-前言">0x00 前言&lt;/h1>
+&lt;p>Kerberos 身份验证时不会传输用户明文密码而是&lt;strong>使用用户明文密码派生的密钥作为加密密钥后进行身份验证&lt;/strong>，这意味着攻击者无需得到用户明文密码也可以通过认证。&lt;/p>
+&lt;p>Kerberos 默认支持三种加密算法：&lt;/p>
+&lt;ul>
+&lt;li>AES -&amp;gt; 使用 AES Key 加密&lt;/li>
+&lt;li>DES -&amp;gt; 使用 LM Hash 加密&lt;/li>
+&lt;li>RC4 -&amp;gt; 使用 NTLM Hash 加密&lt;/li>
+&lt;/ul>
+&lt;p>由于 DES 较之其它两种算法的安全性更低，默认情况下 Windows 7 和 Windows Server 2008 R2 中的 Kerberos 身份验证不再启用 DES 加密，因此本文重点关注 RC4 与 AES 下的利用。&lt;/p>
+&lt;h1 id="0x00-密钥传递">0x00 密钥传递&lt;/h1>
+&lt;p>RC4 默认使用用户的 NTLM Hash 作为加密密钥，AES 默认使用用户的 AES Key 作为加密密钥，KDC 默认支持这两种加密算法，至于使用 RC4 还是 AES 则是与客户端协商后决定的（默认使用客户端支持的最高级加密算法）。&lt;/p>
+&lt;p>无论使用哪种加密算法，都不会使用用户明文密码作为加密密钥，这也就意味着攻击者只需要拿到认证用户的加密密钥即可通过认证，一定程度上拿了密钥和拿明文密码已经没什么区别了。&lt;/p>
+&lt;p>使用 RC4 作为加密算法进行认证的攻击手法被称为 Pass The Hash（PTH），使用 AES 作为加密算法进行认证的攻击手法被称为 Pass The Key（PTK），有时候也被称为 OverPass The Hash，&lt;strong>两种攻击手法原理完全一致，只是加密方式与使用的加密密钥不同&lt;/strong>。&lt;/p>
+&lt;p>正常的认证流程中客户端一般都支持 RC4 和 AES 两种加密算法，在协商时 KDC 会选择客户端支持的最高级加密算法（也就是 AES），因此默认情况下 Kerberos 身份验证过程中一般都是使用的 AES 加密算法。&lt;/p>
+&lt;img src="https://tva1.sinaimg.cn/large/008vxvgGgy1h6zisi2fiyj31f20u0n47"/>
+&lt;h1 id="0x01-获取密钥">0x01 获取密钥&lt;/h1>
+&lt;p>攻击者需要获取有一个认证用户的 NTLM Hash 或是 AES KEY，这一步可以通过 &lt;code>mimikatz&lt;/code> 完成。&lt;/p>
+&lt;p>通过 &lt;code>sekurlsa::logonpasswords&lt;/code> 可以获取内存中的用户凭证，其中就包含此用户的 NTLM Hash：&lt;/p>
+&lt;img src="https://tva1.sinaimg.cn/large/008vxvgGgy1h6zhwldet7j319u0dgacb"/>
+&lt;p>通过 &lt;code>sekurlsa::ekeys&lt;/code> 可以获取用户的 AES KEY，除了 aes256 外还有 aes128，一般是用的 aes256 作为加密方式：&lt;/p>
+&lt;img src="https://tva1.sinaimg.cn/large/008vxvgGgy1h6zhwnqydpj31ay0ge41y"/>
+&lt;h1 id="0x02-获取机器">0x02 获取机器&lt;/h1>
+&lt;p>获取认证用户密钥相当于获取了此用户的 TGT，拥有了 TGT 可以干很多事情，我们可以申请任意服务的 ST，并且可以调用认证用户拥有使用权限的服务。&lt;/p>
+&lt;p>由于普通的域用户一般是域内某台机器的本地管理员，本地管理员可以通过多种方式获得机器权限，但首先需要知道要控制的机器名称或是它的 IP 地址。&lt;/p>
+&lt;p>实战环境中一般&lt;strong>普通域用户只能登陆独属于他的那台机器&lt;/strong>（与实验环境不同），我们可以通过手动配置限制用户访问的机器，下面的配置表明只允许 liming 登陆 pc-02 这台机器。&lt;/p>
+&lt;img src="https://tva1.sinaimg.cn/large/008vxvgGgy1h6zhwqb5b9j31c00u0wkd"/>
+&lt;p>此时当 liming 尝试登陆其它机器时会&lt;strong>遭到拒绝&lt;/strong>：&lt;/p>
+&lt;img src="https://tva1.sinaimg.cn/large/008vxvgGgy1h6zhws4fcej310h0u0jtq"/>
+&lt;p>研究后发现此配置操作的选项为活动目录中的 &lt;strong>userWorkstations&lt;/strong> 属性，可以通过查询此属性得到用户可登陆的机器：&lt;/p>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-python" data-lang="python">&lt;span class="line">&lt;span class="cl">&lt;span class="err">➜&lt;/span> &lt;span class="n">ldapsearch&lt;/span>&lt;span class="o">-&lt;/span>&lt;span class="n">ad&lt;/span> &lt;span class="n">git&lt;/span>&lt;span class="p">:(&lt;/span>&lt;span class="n">master&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="n">python&lt;/span> &lt;span class="n">ldapsearch&lt;/span>&lt;span class="o">-&lt;/span>&lt;span class="n">ad&lt;/span>&lt;span class="o">.&lt;/span>&lt;span class="n">py&lt;/span> &lt;span class="o">-&lt;/span>&lt;span class="n">l&lt;/span> &lt;span class="mf">192.168.216.133&lt;/span> &lt;span class="o">-&lt;/span>&lt;span class="n">u&lt;/span> &lt;span class="s1">&amp;#39;wangfei&amp;#39;&lt;/span> &lt;span class="o">-&lt;/span>&lt;span class="n">hashes&lt;/span> &lt;span class="s1">&amp;#39;:e6d5638bbce5a4d5d9fd05bc712bd982&amp;#39;&lt;/span> &lt;span class="o">-&lt;/span>&lt;span class="n">t&lt;/span> &lt;span class="n">search&lt;/span> &lt;span class="o">-&lt;/span>&lt;span class="n">d&lt;/span> &lt;span class="n">corp&lt;/span> &lt;span class="o">-&lt;/span>&lt;span class="n">s&lt;/span> &lt;span class="s1">&amp;#39;(samaccountname=wangfei)&amp;#39;&lt;/span> &lt;span class="n">userWorkstations&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c1">### Result of &amp;#34;search&amp;#34; command ###&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">[&lt;/span>&lt;span class="o">+&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="o">|&lt;/span>&lt;span class="n">___userWorkstations&lt;/span> &lt;span class="o">=&lt;/span> &lt;span class="n">pc&lt;/span>&lt;span class="o">-&lt;/span>&lt;span class="mi">01&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>NOTE：后续了解到修改 userWorkstations 只是限制的其中一种手段，还可以通过&lt;a class="link" href="https://blog.csdn.net/allway2/article/details/103912597" target="_blank" rel="noopener"
+>组策略&lt;/a>去限制登陆，这块内容在后续实战中会尝试继续补全。&lt;/p>
+&lt;h1 id="0x02-修复建议">0x02 修复建议&lt;/h1>
+&lt;p>PTH 本身是&lt;strong>设计中的正常功能&lt;/strong>，很难给出一个完美的修复方案，但是我们可以考虑从两个角度进行防御：&lt;/p>
+&lt;ol>
+&lt;li>预防：学习 Windows 凭证窃取方法，尝试通过计划任务定时&lt;strong>清除本机的凭证&lt;/strong>&lt;/li>
+&lt;li>增加攻击成本：学习横向移动常见利用，分析流量与运行时特征，通过 HIDS 等方式进行&lt;strong>监控报警或阻断&lt;/strong>&lt;/li>
+&lt;/ol>
+&lt;p>网上有朋友说打了 &lt;strong>KB2871997&lt;/strong> 补丁后就无法 PTH 了，大部分文章中得出来的结论是&lt;strong>打了补丁后 Remote UAC 策略变的更严格了&lt;/strong>，没打补丁之前&lt;strong>只要是个本地管理员都可以 PTH&lt;/strong>（指的是利用 &lt;code>*exec&lt;/code> 的功能），但打了补丁后&lt;strong>只有 SID 为 500 的账户才能进行 PTH&lt;/strong>，同时由于域账户加入到本地管理员组后&lt;strong>可以使用“完全管理员” 权限运行&lt;/strong>，因此同样不受 Remote UAC 的限制。&lt;/p>
+&lt;p>笔者本地的环境测试后发现&lt;strong>无论是打了补丁前还是打了补丁后本地 SID 非 500 的管理员用户都是无法 PTH 的&lt;/strong>，感觉可能是环境问题导致的，不过问题不大，我们只需要知道&lt;strong>打了此补丁是不影响域内 PTH 的&lt;/strong>（因为域用户一般也&lt;strong>是某台机器的本地管理员&lt;/strong>）。&lt;/p></description></item><item><title>小技巧 MAC 下的 DNS 配置</title><link>https://tlmn-local.github.io/2022/10/10/%E5%B0%8F%E6%8A%80%E5%B7%A7-mac-%E4%B8%8B%E7%9A%84-dns-%E9%85%8D%E7%BD%AE/</link><pubDate>Mon, 10 Oct 2022 00:40:48 +0800</pubDate><guid>https://tlmn-local.github.io/2022/10/10/%E5%B0%8F%E6%8A%80%E5%B7%A7-mac-%E4%B8%8B%E7%9A%84-dns-%E9%85%8D%E7%BD%AE/</guid><description>&lt;p>在学习内网渗透或实战中必然需要配置机器的 DNS 以实现访问域环境，这里提供两个在 MacOS 中配置 DNS 的方案。&lt;/p>
 &lt;p>方案一：通过 WIFI GUI 进行配置，在系统偏好设置 &amp;ndash;&amp;gt; 网络 &amp;ndash;&amp;gt; 高级 &amp;ndash;&amp;gt; DNS 中可配置 DNS 服务器与检索域。&lt;/p>
 &lt;img src="https://tva1.sinaimg.cn/large/008vxvgGgy1h6zibgnbzsj30vv0u0jsz.jpg"/>
 &lt;p>但这样的配置与 WIFI 绑定，同时如果只配了一个 DNS 服务器容易出现当实验环境关闭时不可联网的问题。&lt;/p>
